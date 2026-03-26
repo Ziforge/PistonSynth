@@ -213,14 +213,22 @@ public:
     double crank_angle_deg = 0.0;
     double sample_rate = 44100.0;
 
-    // Current state
+    // Per-voice state (set by noteOn)
     double rpm = 0.0;
     double fuel = 0.0;
+    double velocity = 0.0;      // Original velocity, preserved
     bool active = false;
+    int assigned_note = -1;     // MIDI note this voice is playing
 
-    // Smoothing for parameter changes
+    // Smoothing
     double rpm_smooth = 0.0;
     double fuel_smooth = 0.0;
+
+    // External parameters (set per-block by processor)
+    double exhaust_cutoff_ext = 400.0;   // From Exhaust Cutoff knob
+    double turbo_mix_ext = 0.3;          // From Turbo Mix knob
+    double pitch_bend = 0.0;             // Semitones from pitch bend wheel
+    double mod_wheel = 0.0;              // 0-1 from mod wheel
 
     void prepare(double sr) {
         sample_rate = sr;
@@ -243,14 +251,17 @@ public:
         }
     }
 
-    void noteOn(double rpm_target, double fuel_amount) {
+    void noteOn(double rpm_target, double fuel_amount, double vel, int note) {
         rpm = rpm_target;
         fuel = fuel_amount;
+        velocity = vel;
+        assigned_note = note;
         active = true;
     }
 
     void noteOff() {
         active = false;
+        assigned_note = -1;
     }
 
     float processSample() {
@@ -259,9 +270,22 @@ public:
 
         double dt = 1.0 / sample_rate;
 
+        // Apply pitch bend to RPM (±2 semitones = ±bend_range)
+        double bent_rpm = rpm * std::pow(2.0, pitch_bend / 12.0);
+
+        // Mod wheel adds vibrato
+        double vibrato = 0.0;
+        if (mod_wheel > 0.01 && active) {
+            static double vib_phase = 0.0;
+            vib_phase += 5.5 * dt;
+            if (vib_phase > 1.0) vib_phase -= 1.0;
+            vibrato = std::sin(TWO_PI * vib_phase) * mod_wheel * 0.02;
+            bent_rpm *= (1.0 + vibrato);
+        }
+
         // Smooth parameter transitions
-        double smoothing = 1.0 - std::exp(-dt / 0.05); // 50ms smoothing
-        rpm_smooth += (rpm - rpm_smooth) * smoothing;
+        double smoothing = 1.0 - std::exp(-dt / 0.05);
+        rpm_smooth += (bent_rpm - rpm_smooth) * smoothing;
         if (!active) {
             fuel_smooth += (0.0 - fuel_smooth) * smoothing;
             rpm_smooth += (0.0 - rpm_smooth) * (1.0 - std::exp(-dt / 0.3));
@@ -279,19 +303,18 @@ public:
             total += cyl.computePressure(crank_angle_deg, fuel_smooth);
         total /= NUM_CYLINDERS;
 
-        // Exhaust pipe lowpass
-        double cutoff = 200.0 + fuel_smooth * 600.0;
+        // Exhaust pipe lowpass — uses external knob value
+        double cutoff = exhaust_cutoff_ext + fuel_smooth * 400.0;
         double filtered = exhaust_lpf.process(total, cutoff, sample_rate);
 
-        // Turbo whine
-        double tw = turbo.process(rpm_smooth, fuel_smooth, dt);
+        // Turbo whine — scaled by external mix knob
+        double tw = turbo.process(rpm_smooth, fuel_smooth, dt) * turbo_mix_ext;
 
         // Mechanical clatter
         double mech = noise.next() * 0.03 * (rpm_smooth / 2000.0);
 
         double mix = filtered * 0.8 + tw + mech;
         mix = dc_block.process(mix);
-        mix = std::tanh(mix * 1.5); // Soft clip
 
         return (float)mix;
     }

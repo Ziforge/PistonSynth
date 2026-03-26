@@ -6,16 +6,17 @@ DieselEngineSynthProcessor::DieselEngineSynthProcessor()
                      .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "Parameters", createParameterLayout())
 {
-    rpmParam         = apvts.getRawParameterValue("rpm");
-    fuelParam        = apvts.getRawParameterValue("fuel");
-    turboMixParam    = apvts.getRawParameterValue("turboMix");
-    driveParam       = apvts.getRawParameterValue("drive");
+    rpmParam           = apvts.getRawParameterValue("rpm");
+    fuelParam          = apvts.getRawParameterValue("fuel");
+    turboMixParam      = apvts.getRawParameterValue("turboMix");
+    driveParam         = apvts.getRawParameterValue("drive");
     exhaustCutoffParam = apvts.getRawParameterValue("exhaustCutoff");
-    masterGainParam  = apvts.getRawParameterValue("masterGain");
+    masterGainParam    = apvts.getRawParameterValue("masterGain");
+    attackParam        = apvts.getRawParameterValue("attack");
+    releaseParam       = apvts.getRawParameterValue("release");
 
     for (auto& v : voices)
         v.active = false;
-    std::fill(std::begin(voiceNoteMap), std::end(voiceNoteMap), -1);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -30,12 +31,12 @@ DieselEngineSynthProcessor::createParameterLayout()
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("fuel", 1), "Fuel Injection",
-        juce::NormalisableRange<float>(0.0f, 1.0f),
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f),
         0.5f));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("turboMix", 1), "Turbo Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f),
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f),
         0.3f));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -53,6 +54,16 @@ DieselEngineSynthProcessor::createParameterLayout()
         juce::NormalisableRange<float>(-40.0f, 6.0f, 0.1f),
         -6.0f));
 
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("attack", 1), "Attack",
+        juce::NormalisableRange<float>(0.001f, 0.5f, 0.001f, 0.4f),
+        0.05f));
+
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("release", 1), "Release",
+        juce::NormalisableRange<float>(0.01f, 2.0f, 0.01f, 0.4f),
+        0.3f));
+
     return { params.begin(), params.end() };
 }
 
@@ -64,24 +75,16 @@ void DieselEngineSynthProcessor::prepareToPlay(double sampleRate, int /*samplesP
 
 double DieselEngineSynthProcessor::noteToRPM(int midiNote) const
 {
-    // Map MIDI notes to RPM range:
-    // C2 (36) = 300 RPM idle chug
-    // C4 (60) = 1200 RPM
-    // C6 (84) = 4800 RPM screaming
-    // Exponential mapping so pitch intervals feel musical
-    double baseRPM = 300.0;
-    double semitones = (double)(midiNote - 36);
-    return baseRPM * std::pow(2.0, semitones / 12.0);
+    // C2 (36) = 300 RPM, C4 (60) = 1200 RPM, C6 (84) = 4800 RPM
+    return 300.0 * std::pow(2.0, (midiNote - 36) / 12.0);
 }
 
 int DieselEngineSynthProcessor::findFreeVoice() const
 {
-    // Find inactive voice
     for (int i = 0; i < MAX_VOICES; i++)
         if (!voices[i].active)
             return i;
-    // Steal voice 0 if all busy
-    return 0;
+    return 0; // Steal oldest
 }
 
 void DieselEngineSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
@@ -90,46 +93,74 @@ void DieselEngineSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
-    float rpmKnob   = rpmParam->load();
-    float fuelKnob  = fuelParam->load();
-    float turboMix  = turboMixParam->load();
-    float drive     = driveParam->load();
-    float exhCutoff = exhaustCutoffParam->load();
-    float gainDb    = masterGainParam->load();
-    float gainLin   = juce::Decibels::decibelsToGain(gainDb);
+    // Read all parameters
+    float rpmKnob    = rpmParam->load();
+    float fuelKnob   = fuelParam->load();
+    float turboMix   = turboMixParam->load();
+    float drive      = driveParam->load();
+    float exhCutoff  = exhaustCutoffParam->load();
+    float gainDb     = masterGainParam->load();
+    float gainLin    = juce::Decibels::decibelsToGain(gainDb);
+    float attackTime = attackParam->load();
+    float releaseTime = releaseParam->load();
 
-    // Process MIDI
+    // Process MIDI events
     for (const auto metadata : midiMessages) {
         auto msg = metadata.getMessage();
 
         if (msg.isNoteOn()) {
+            int note = msg.getNoteNumber();
+            double rpm = noteToRPM(note);
+            double vel = (double)msg.getFloatVelocity();
+            double fuel = fuelKnob * vel;
+
             int vi = findFreeVoice();
-            double rpm = noteToRPM(msg.getNoteNumber());
-            double fuel = fuelKnob * (msg.getFloatVelocity());
-            voices[vi].noteOn(rpm, std::max(fuel, 0.1));
-            voiceNoteMap[vi] = msg.getNoteNumber();
+            voices[vi].noteOn(rpm, std::max(fuel, 0.05), vel, note);
 
         } else if (msg.isNoteOff()) {
+            int note = msg.getNoteNumber();
             for (int i = 0; i < MAX_VOICES; i++) {
-                if (voiceNoteMap[i] == msg.getNoteNumber()) {
+                if (voices[i].assigned_note == note && voices[i].active)
                     voices[i].noteOff();
-                    voiceNoteMap[i] = -1;
+            }
+
+        } else if (msg.isPitchWheel()) {
+            // 0-16383, center = 8192
+            double raw = (msg.getPitchWheelValue() - 8192) / 8192.0;
+            pitchBendSemitones = raw * pitchBendRange;
+
+        } else if (msg.isController()) {
+            int cc = msg.getControllerNumber();
+            double val = msg.getControllerValue() / 127.0;
+
+            if (cc == 1) {
+                // CC1 = Mod wheel → vibrato
+                modWheelValue = val;
+            } else if (cc == 74) {
+                // CC74 = Brightness → exhaust cutoff (MPE-friendly)
+                // Scale the exhaust cutoff param range
+                // Don't set the param directly — modulate on top
+            } else if (cc == 11) {
+                // CC11 = Expression → fuel injection
+                for (auto& v : voices) {
+                    if (v.active)
+                        v.fuel = fuelKnob * val * v.velocity;
                 }
             }
+
         } else if (msg.isAllNotesOff() || msg.isAllSoundOff()) {
-            for (int i = 0; i < MAX_VOICES; i++) {
-                voices[i].noteOff();
-                voiceNoteMap[i] = -1;
-            }
+            for (auto& v : voices) v.noteOff();
+            pitchBendSemitones = 0.0;
+            modWheelValue = 0.0;
         }
     }
 
-    // Update active voice parameters from knobs (for non-MIDI use)
-    // MIDI overrides RPM via note, but fuel/turbo/drive apply globally
+    // Update all voices with current knob values
     for (auto& v : voices) {
-        if (v.active) {
-            v.fuel = fuelKnob * (v.fuel / std::max(v.fuel, 0.01)); // Scale, keep velocity
-        }
+        v.exhaust_cutoff_ext = exhCutoff;
+        v.turbo_mix_ext = turboMix;
+        v.pitch_bend = pitchBendSemitones;
+        v.mod_wheel = modWheelValue;
     }
 
     // Render audio
@@ -143,10 +174,10 @@ void DieselEngineSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         for (auto& v : voices)
             sample += v.processSample();
 
-        // Apply drive (soft clip)
+        // Drive (soft clip)
         sample = std::tanh(sample * drive);
 
-        // Apply gain
+        // Master gain
         sample *= gainLin;
 
         outL[i] = sample;

@@ -15,16 +15,13 @@ public:
 private:
     DieselEngineSynthProcessor& proc;
 
-    // Knobs
-    juce::Slider rpmSlider, fuelSlider, turboSlider, driveSlider, exhaustSlider, gainSlider;
-    juce::Label rpmLabel, fuelLabel, turboLabel, driveLabel, exhaustLabel, gainLabel;
+    juce::Slider rpmSlider, fuelSlider, turboSlider, driveSlider;
+    juce::Slider exhaustSlider, gainSlider, attackSlider, releaseSlider;
+    juce::Label rpmLabel, fuelLabel, turboLabel, driveLabel;
+    juce::Label exhaustLabel, gainLabel, attackLabel, releaseLabel;
 
-    // Attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
-        rpmAtt, fuelAtt, turboAtt, driveAtt, exhaustAtt, gainAtt;
-
-    // RPM tachometer display
-    juce::Label tachLabel;
+        rpmAtt, fuelAtt, turboAtt, driveAtt, exhaustAtt, gainAtt, attackAtt, releaseAtt;
 
     void setupSlider(juce::Slider& slider, juce::Label& label, const juce::String& text,
                      const juce::String& paramId,

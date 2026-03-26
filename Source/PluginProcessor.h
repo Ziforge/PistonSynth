@@ -20,7 +20,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 0.5; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -33,10 +33,8 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    // Engine voices (polyphonic — multiple engine notes)
     static constexpr int MAX_VOICES = 8;
     std::array<DieselEngineVoice, MAX_VOICES> voices;
-    int voiceNoteMap[MAX_VOICES] = {}; // MIDI note for each voice
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -48,11 +46,16 @@ private:
     std::atomic<float>* driveParam = nullptr;
     std::atomic<float>* exhaustCutoffParam = nullptr;
     std::atomic<float>* masterGainParam = nullptr;
+    std::atomic<float>* attackParam = nullptr;
+    std::atomic<float>* releaseParam = nullptr;
 
-    // MIDI note → RPM mapping
+    // MIDI state
+    double pitchBendSemitones = 0.0;
+    double modWheelValue = 0.0;
+    double pitchBendRange = 2.0; // ±2 semitones default
+
+    // MIDI note → RPM
     double noteToRPM(int midiNote) const;
-
-    // Find free voice or steal oldest
     int findFreeVoice() const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DieselEngineSynthProcessor)
