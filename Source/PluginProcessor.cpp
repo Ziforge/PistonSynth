@@ -131,21 +131,46 @@ void DieselEngineSynthProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
         } else if (msg.isController()) {
             int cc = msg.getControllerNumber();
-            double val = msg.getControllerValue() / 127.0;
+            float val = msg.getControllerValue() / 127.0f;
 
             if (cc == 1) {
                 // CC1 = Mod wheel → vibrato
                 modWheelValue = val;
-            } else if (cc == 74) {
-                // CC74 = Brightness → exhaust cutoff (MPE-friendly)
-                // Scale the exhaust cutoff param range
-                // Don't set the param directly — modulate on top
             } else if (cc == 11) {
                 // CC11 = Expression → fuel injection
                 for (auto& v : voices) {
                     if (v.active)
                         v.fuel = fuelKnob * val * v.velocity;
                 }
+            }
+            // CC-to-parameter mappings (standard CC numbers)
+            // CC16 = RPM, CC17 = Fuel, CC18 = Turbo, CC19 = Drive
+            // CC20 = Exhaust Cutoff, CC21 = Gain, CC22 = Attack, CC23 = Release
+            // CC74 = Exhaust Cutoff (MPE Brightness — alternative)
+            else if (cc == 16) {
+                auto* p = apvts.getParameter("rpm");
+                p->setValueNotifyingHost(val);
+            } else if (cc == 17) {
+                auto* p = apvts.getParameter("fuel");
+                p->setValueNotifyingHost(val);
+            } else if (cc == 18) {
+                auto* p = apvts.getParameter("turboMix");
+                p->setValueNotifyingHost(val);
+            } else if (cc == 19) {
+                auto* p = apvts.getParameter("drive");
+                p->setValueNotifyingHost(val);
+            } else if (cc == 20 || cc == 74) {
+                auto* p = apvts.getParameter("exhaustCutoff");
+                p->setValueNotifyingHost(val);
+            } else if (cc == 21) {
+                auto* p = apvts.getParameter("masterGain");
+                p->setValueNotifyingHost(val);
+            } else if (cc == 22) {
+                auto* p = apvts.getParameter("attack");
+                p->setValueNotifyingHost(val);
+            } else if (cc == 23) {
+                auto* p = apvts.getParameter("release");
+                p->setValueNotifyingHost(val);
             }
 
         } else if (msg.isAllNotesOff() || msg.isAllSoundOff()) {

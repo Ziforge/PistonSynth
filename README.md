@@ -1,5 +1,7 @@
 # Piston Synth
 
+![Piston Synth](screenshot.png)
+
 A physical-modeling synthesizer that turns the thermodynamics of a 6-cylinder diesel engine into a musical instrument. Every sound — melodic voices, kick drums, snares, hi-hats, cymbals — is generated from the same combustion physics.
 
 ## Based On
