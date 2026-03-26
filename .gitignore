@@ -1,0 +1,10 @@
+build/
+*.o
+*.wav
+diesel_synth
+diesel_song
+diesel_song_v2
+diesel_song_v3
+diesel_godflesh
+diesel_tool
+.DS_Store
